@@ -1,0 +1,110 @@
+// Simulating a bidirectional gene flow scenario and testing the bidirectional admixture proportion estimation for "Notes on f4-ratio estimation", Kalle Leppälä.
+// Mutations are added with recapitulation and coalescent simulations, as logged in bidirectional.py, and the admixture proportion estimation is made in bidirectional.R.
+initialize() {
+	setSeed(0); // For reproducibility.
+	initializeSLiMModelType("nonWF");
+	initializeTreeSeq(); // Using tree-seq recording.
+	defineConstant("K", 10000);	// Constant population size on any branch.
+	defineConstant("ONE", 2); // Burn-in not needed because standing variation is generated with recapitulation. 
+	defineConstant("TWO", ONE + 2 * K);
+	defineConstant("THREE", TWO + 2 * K);
+	defineConstant("FOUR", THREE + 2 * K);
+	defineConstant("ADMIX", THREE + K);
+	defineConstant("ALPHA", 0.333);
+	defineConstant("BETA", 0.333);
+
+	// Neutral mutations, which are allowed to fix.
+	initializeMutationType("m1", 0.5, "f", 0.0);
+	m1.convertToSubstitution = T;
+	
+	// Ten chromosomes of length 100000000.
+	initializeGenomicElementType("g1", m1, 1.0);
+	for (id in 1:10) {
+		initializeChromosome(id, 99999999, "A");
+		initializeGenomicElement(g1);
+		initializeMutationRate(0); // Neutral mutations are added later.
+		initializeRecombinationRate(1e-8);
+	}
+}
+
+// Every 100 generations, simplify the tree to save memory.
+late() {
+    if (sim.cycle % 100 == 0) {
+        sim.treeSeqSimplify();
+    }
+}
+
+// Each individual reproduces itself once, twice at special occacions.
+reproduction() {
+	for (i in p1.individuals) {
+		p1.addCrossed(p1.sampleIndividuals(1), p1.sampleIndividuals(1));
+		if (sim.cycle == THREE) {
+			p1.addCrossed(p1.sampleIndividuals(1), p1.sampleIndividuals(1));
+		}
+	}
+	for (i in p2.individuals) {
+		p2.addCrossed(p2.sampleIndividuals(1), p2.sampleIndividuals(1));
+	}
+	for (i in p3.individuals) {
+		p3.addCrossed(p3.sampleIndividuals(1), p3.sampleIndividuals(1));
+	}
+	for (i in p4.individuals) {
+		p4.addCrossed(p4.sampleIndividuals(1), p4.sampleIndividuals(1));
+		if (sim.cycle == TWO | sim.cycle == THREE) {
+			p4.addCrossed(p4.sampleIndividuals(1), p4.sampleIndividuals(1));
+		}
+	}
+	for (i in p5.individuals) {
+		p5.addCrossed(p5.sampleIndividuals(1), p5.sampleIndividuals(1));
+		if (sim.cycle == ONE) {
+			p5.addCrossed(p5.sampleIndividuals(1), p5.sampleIndividuals(1));
+		}
+	}
+	self.active = 0;
+}
+
+// Create initial populations of K or 0 individuals.
+1 early() {
+	sim.addSubpop("p1", 0);
+	sim.addSubpop("p2", 0);
+	sim.addSubpop("p3", 0);
+	sim.addSubpop("p4", 0);
+	sim.addSubpop("p5", K);
+}
+
+// Bifurcating the populations.
+ONE early(){
+	movers = sample(p5.subsetIndividuals(maxAge = 0), K);
+	p4.takeMigrants(movers);
+}
+TWO early(){
+	movers = sample(p4.subsetIndividuals(maxAge = 0), K);
+	p1.takeMigrants(movers);
+}
+THREE early(){
+	movers = sample(p1.subsetIndividuals(maxAge = 0), K);
+	p2.takeMigrants(movers);
+	movers = sample(p4.subsetIndividuals(maxAge = 0), K);
+	p3.takeMigrants(movers);
+}
+
+ADMIX early(){
+   // Note that the population sizes match in our case.
+	movers2 = sample(p2.subsetIndividuals(maxAge = 0), asInteger(BETA * K)); 
+	movers3 = sample(p3.subsetIndividuals(maxAge = 0), asInteger(ALPHA * K));
+	p3.takeMigrants(movers2);
+	p2.takeMigrants(movers3);
+}
+
+// Limit the population size at K on all branches always.
+early() {
+	for (subpop in sim.subpopulations) {
+		sim.killIndividuals(subpop.subsetIndividuals(minAge = 1));
+	}
+}
+
+// At some point stop.
+FOUR late() {
+	sim.treeSeqOutput("bidirectional.trees");
+	sim.simulationFinished();
+}
