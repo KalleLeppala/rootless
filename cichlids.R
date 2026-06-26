@@ -201,9 +201,11 @@ fB <- function(blocks,
             overB <- numeric(0)
             # Minimum over elements of B:
             for (b in strsplit(B, "")[[1]]) {
-              overB[length(overB) + 1] <- qpdstat(blocks, b, a, d, e)$est / qpdstat(blocks, c, a, d, e)$est
+              if (qpdstat(blocks, b, a, d, e)$z > threshold) {
+                overB[length(overB) + 1] <- qpdstat(blocks, b, a, d, e)$est / qpdstat(blocks, c, a, d, e)$est
+              } else {overB[length(overB) + 1] <- 0}
             }
-            overACDE[length(overACDE) + 1] <- max(0, min(overB))
+            overACDE[length(overACDE) + 1] <- min(overB)
           }
         }}}}
         # If all the denominators failed to be positive, this (lower) median might become NA:
@@ -226,7 +228,7 @@ fB <- function(blocks,
 }
 
 ###################################################################################################
-### DSUITE'S FIGURE 3 USING MALINSKY'S F-BRANCH (REPLICATION) #####################################
+### DSUITE'S FIGURE 3 USING MALINSKY'S F-BRANCH (REPRODUCTION) ####################################
 ###################################################################################################
 
 rownames <- c("mnopqrstabcd", "mnopqrsta", "mnopq", "m", "nopq", "n", "opq", "o", "pq", "p", "q",
@@ -280,9 +282,9 @@ plot <- ggplot(df, aes(x = col, y = row, fill = value)) +
     axis.text.y = element_blank(),
     plot.margin = margin(0.1, 0, 0, 0),
     legend.position = "right",
-    legend.box.spacing = unit(0.1, "cm")
+    legend.box.spacing = unit(0.2, "cm")
   )
-ggsave("fish_Malinsky.pdf", height = 7.6, width = 4.4, units = "cm")
+ggsave("fish_Malinsky.pdf", height = 7.6, width = 4.5, units = "cm")
 
 ###################################################################################################
 ### DSUITE'S FIGURE 3 USING ENHANCED F-BRANCH #####################################################
@@ -340,9 +342,9 @@ plot <- ggplot(df, aes(x = col, y = row, fill = value)) +
     axis.text.y = element_blank(),
     plot.margin = margin(0.1, 0, 0, 0),
     legend.position = "right",
-    legend.box.spacing = unit(0.1, "cm")
+    legend.box.spacing = unit(0.2, "cm")
   )
-ggsave("fish_enhanced.pdf", height = 7.6, width = 4.4, units = "cm")
+ggsave("fish_enhanced.pdf", height = 7.6, width = 4.5, units = "cm")
 
 ###################################################################################################
 ### FULL FIGURE USING USING MALINSKY'S F-BRANCH ###################################################
@@ -464,3 +466,11 @@ plot <- ggplot(df, aes(x = col, y = row, fill = value)) +
     legend.box.spacing = unit(0.1, "cm")
   )
 ggsave("fish_enhanced_full.pdf", height = 8.301, width = 8.66, units = "cm")
+
+###################################################################################################
+### TESTING HOW ADMIXTOOL'S FIND_GRAPHS() PERFORMS ################################################
+###################################################################################################
+
+
+
+
