@@ -13,7 +13,9 @@
 # while artificial restrictions in f4-ratio on the tree marked with an asterisk or Malinsky's branch statistic prevent it.
 setwd("C:/Users/kalle/Desktop/bears") # Replace with your own folder.
 library(admixtools)
+library(grid)
 library(ggplot2)
+library(glue) # For convenient definition of a large phylogeny.
 
 ###################################################################################################
 ### PRE-COMPUTE f2-STATISTICS #####################################################################
@@ -24,49 +26,14 @@ library(ggplot2)
 # Files are stored at https://doi.org/10.5061/dryad.qbzkh18n6.
 # The thinned autosomal DNA data are in Brown135_auto.mysnps.thinned.20000.vcf.gz.
 # Allocation into 27 populations are in brown135_popfile.allinfo.txt.
-# But my code works on population names of one symbol only.
-# The English language only has 26 letters so I will assign "0" to Black, and let the other populations be coded as:
-# "a": MiddleEast
-# "b": Himalaya
-# "c": Europe
-# "d": SouthScand
-# "e": MidScand
-# "f": NorthScand
-# "g": Baltic
-# "h": Ural
-# "i": CentreRus2
-# "j": CentreRus
-# "k": Yakutia
-# "l": Amur
-# "m": Hokkaido
-# "n": Sakhalin
-# "o": Magadan
-# "p": Kamtchatka
-# "q": Aleutian
-# "r": Kodiak
-# "s": Alaska
-# "t": ABCa
-# "u": ABCbc
-# "v": ABCcoast2
-# "w": Westcoast
-# "x": ABCcoast1
-# "y": HudsonBay
-# "z": polar
 # The first step is to turn the vcf into binary PLINK files:
 # plink --vcf Brown135_auto.mysnps.thinned.20000.vcf.gz --allow-extra-chr --make-bed --out bears
 fam <- read.table("bears.fam", stringsAsFactors = FALSE)
 inds <- fam$V2
 popinfo <- read.table("Brown135_popfile.allinfo.txt", header = TRUE, sep = "\t", stringsAsFactors = FALSE)
-dict1 <- setNames(popinfo[[2]], popinfo[[1]])
-popletters <- c("a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n",
-                "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z", "0")
-popnames <- c("MiddleEast", "Himalaya", "Europe", "SouthScand", "MidScand", "NorthScand", "Baltic",
-              "Ural", "CentreRus2", "CentreRus", "Yakutia", "Amur", "Hokkaido", "Sakhalin",
-              "Magadan", "Kamtchatka", "Aleutian", "Kodiak", "Alaska", "ABCa", "ABCbc",
-              "ABCcoast2", "Westcoast", "ABCcoast1", "HudsonBay", "polar", "Black")
-dict2 <- setNames(popletters, popnames)
-pops <- dict2[dict1[inds]]
-pops[93] <- "f"; pops[94] <- "f" # Assume "Kola1" = "Russia_Kola1" and "Kola3" = "Russia_Kola3".
+dict <- setNames(popinfo[[2]], popinfo[[1]])
+pops <- dict[inds]
+pops[93] <- "NorthScand"; pops[94] <- "NorthScand" # Assume "Kola1" = "Russia_Kola1" and "Kola3" = "Russia_Kola3".
 extract_f2("bears", "bears", overwrite = T, poly_only = T, auto_only = F, inds = inds, pops = pops)
 blocks <- f2_from_precomp("bears")
 dim(blocks) # There are 2667 blocks of size 27x27.
@@ -76,41 +43,42 @@ count_snps(blocks) # There are 90928 variants.
 ### THE PHYLOGENY #################################################################################
 ###################################################################################################
 
-# I'm going to be using a simplified Newick notation that doesn't have branch lengths or commas,
-# and assumes that the population label is one symbol.
+# I'm using Newick notation with leaf labels only, no branch lengths.
 # The tree is from Figure 4 panel g of the de Jong et al. article, the "backbone" tree made by TreeMix.
-tree <- "(((((((((((((vw)t)u)x)y)s)q)r)((((((mn)l)o)k)p)(ij)))((((de)f)((ac)g))h))b)z)0)"
-# I will also need another tree where the number of American brown bear populations is reduced.
-less_Americans <- "(((((((((uy)s)q)r)((((((mn)l)o)k)p)(ij)))((((de)f)((ac)g))h))b)z)0)"
+# For convenience I'm using the R package glue to define the tree.
+Europe <- "(Ural,((Baltic,(MiddleEast,Europe)),(NorthScand,(MidScand,SouthScand))))"
+Asia <- "((CentreRus,CentreRus2),(Kamtchatka,(Yakutia,(Magadan,(Amur,(Sakhalin,Hokkaido))))))"
+America <- "(Kodiak,(Aleutian,(Alaska,(HudsonBay,(ABCcoast1,(ABCbc,(ABCa,(ABCcoast2,Westcoast))))))))"
+tree <- glue("(Black,(polar,(Himalaya,({Europe},({Asia},{America})))))")
+less_Americans <- glue("((((((Kodiak,(Aleutian,(Alaska,(ABCbc,HudsonBay)))),{Asia}),{Europe}),Himalaya),polar),Black)")
 
 ###################################################################################################
 ### FUNCTIONS #####################################################################################
 ###################################################################################################
 
-# Remove all parentheses from a string.
-strip <- function(string) {gsub("[()]", "", string)}
-
-# Order the characters of a string alphabetically.
-canonize <- function(string) {paste(sort(strsplit(string, "")[[1]]), collapse = "")}
+# Remove all parentheses from a string. Then interpret it as words separated by commas, then organize those words alphabetically.
+canonize <- function(string) {
+  return(paste(sort(trimws(strsplit(gsub("[()]", "", string), ",")[[1]])), collapse = ","))
+}
 
 # Return all descendants of the sister branch of a given branch.
 A <- function(tree, branch) {
   # For comparison, make sure branch is in a canonized form:
-  branch <- canonize(strip(branch))
+  branch <- canonize(branch)
   # Remove outer parentheses:
   wood <- substr(tree, 2, nchar(tree) - 1)
-  # Find the deepest branching point of the tree:
   result <- ""
-  for (i in seq(1, nchar(wood) - 1)) {
+  # Find the deepest branching point of the tree:
+  for (i in gregexpr(",", wood)[[1]]) { # Loop through the commas, which we know do exist.
     if (sum(strsplit(substr(wood, 1, i), "")[[1]] == "(") == sum(strsplit(substr(wood, 1, i), "")[[1]] == ")")) {
-      left <- substr(wood, 1, i)
+      left <- substr(wood, 1, i - 1)
       right <- substr(wood, i + 1, nchar(wood))
       # If branch is encountered, return its sister branch.
-      if (canonize(strip(left)) == branch) {result <- canonize(strip(right))}
-      if (canonize(strip(right)) == branch) {result <- canonize(strip(left))}
-      # Unless the two branches are terminal, recursively call A.
-      if (nchar(left) > 1) {result <- paste0(result, A(left, branch))}
-      if (nchar(right) > 1) {result <- paste0(result, A(right, branch))}
+      if (canonize(left) == branch) {result <- canonize(right)}
+      if (canonize(right) == branch) {result <- canonize(left)}
+      # Unless the two branches are terminal, recursively call A. The paste0() is here just to pass the result back from subtasks.
+      if (grepl(",", left)) {result <- paste0(result, A(left, branch))}
+      if (grepl(",", right)) {result <- paste0(result, A(right, branch))}
     }
   }
   return(result)
@@ -118,10 +86,10 @@ A <- function(tree, branch) {
 
 # Malinsky's f-branch statistic f_b.
 fb <- function(blocks, tree, source, branch, out) {
-  A <- strsplit(A(tree, branch), "")[[1]]
-  B <- strsplit(branch, "")[[1]]
+  A <- strsplit(A(tree, branch), ",")[[1]]
+  B <- strsplit(branch, ",")[[1]]
   # Malinsky's f-branch is undefined in certain edge cases:
-  if (source %in% A || source %in% B || nchar(source) > 1 || out %in% A || out %in% B || nchar(out) > 1 || source == out) {
+  if (source %in% A || source %in% B || grepl(",", source) || out %in% A || out %in% B || grepl(",", out) || source == out) {
     result <- NA
   } else {
     # Median over elements of A:
@@ -130,7 +98,7 @@ fb <- function(blocks, tree, source, branch, out) {
       overB <- numeric(0)
       # Minimum over elements of B:
       for(b in B) {
-        overB[length(overB) + 1] <- qpdstat(blocks, b, a, source, out)$est/qpdstat(blocks, source, a, source, out)$est 
+        overB[length(overB) + 1] <- qpdstat(blocks, b, a, source, out)$est / qpdstat(blocks, source, a, source, out)$est 
       }
       overA[length(overA) + 1] <- max(0, min(overB))
     }
@@ -141,15 +109,15 @@ fb <- function(blocks, tree, source, branch, out) {
 
 # Break a tree given in simplified Newick notation into a vector of branches.
 branches <- function(tree) {
-  if (nchar(tree) == 1) {return(c(tree))}
+  if (!grepl(",", tree)) {return(c(tree))} # No commas means that the string is a single leaf.
   else {
     # Remove outer parentheses:
     wood <- substr(tree, 2, nchar(tree) - 1)
     # Find the deepest branching point of the tree:
-    for (i in seq(1, nchar(wood) - 1)) {
+    for (i in gregexpr(",", wood)[[1]]) { # Loop through the commas, which we know do exist.
       if (sum(strsplit(substr(wood, 1, i), "")[[1]] == "(") == sum(strsplit(substr(wood, 1, i), "")[[1]] == ")")) {
         # The root is a branch, and recursively find the rest of the branches of each side.
-        return(c(canonize(strip(wood)), branches(substr(wood, 1, i)), branches(substr(wood, i + 1, nchar(wood)))))
+        return(c(canonize(wood), branches(substr(wood, 1, i - 1)), branches(substr(wood, i + 1, nchar(wood)))))
       }
     }
   }
@@ -157,7 +125,7 @@ branches <- function(tree) {
 
 # Check if x is a subset of y.
 subset <- function(x, y) {
-  all(strsplit(x, "")[[1]] %in% strsplit(y, "")[[1]])
+  all(strsplit(x, ",")[[1]] %in% strsplit(y, ",")[[1]])
 }
 
 # Given a tree and source and target branches, return the list of connecting sets C = S_0, S_1, ..., S_n, A.
@@ -176,7 +144,7 @@ sets <- function(tree, source, target) {
   overlap <- intersect(sourceancestors, targetancestors)
   sourceancestors <- setdiff(sourceancestors, overlap)
   targetancestors <- setdiff(targetancestors, overlap)
-  lastancestor <- overlap[which.min(nchar(overlap))]
+  lastancestor <- overlap[which.min(sapply(overlap, function(x) stringr::str_count(x, ",")))]
   # Sisters of ancestors of the source branch (which counts):
   if (length(sourceancestors) == 0) {
     sourcesisters <- character(0)
@@ -184,9 +152,9 @@ sets <- function(tree, source, target) {
   } else if (length(sourceancestors) == 1) {
     sourcesisters <- source
   } else {
-    sourceancestors <- lapply(sourceancestors, function(s) strsplit(s, "")[[1]])
+    sourceancestors <- lapply(sourceancestors, function(s) strsplit(s, ",")[[1]])
     sourcesisters <- mapply(setdiff, sourceancestors[- 1], sourceancestors[- length(sourceancestors)], SIMPLIFY = FALSE)
-    sourcesisters <- c(source, sapply(sourcesisters, paste0, collapse = ""))
+    sourcesisters <- c(source, sapply(sourcesisters, paste0, collapse = ","))
   }
   # Sisters of ancestors of the target branch (which doesn't count):
   if (length(targetancestors) == 0) {
@@ -194,13 +162,13 @@ sets <- function(tree, source, target) {
   } else if (length(targetancestors) == 1) {
     targetsisters <- character(0)
   } else {
-    targetancestors <- lapply(targetancestors, function(s) strsplit(s, "")[[1]])
+    targetancestors <- lapply(targetancestors, function(s) strsplit(s, ",")[[1]])
     targetsisters <- mapply(setdiff, targetancestors[- 1], targetancestors[- length(targetancestors)], SIMPLIFY = FALSE)
-    targetsisters <- rev(sapply(targetsisters, paste0, collapse = ""))
+    targetsisters <- rev(sapply(targetsisters, paste0, collapse = ","))
   }
   # Other descendants of the common ancestors:
-  othersisters <- setdiff(strsplit(all[1], "")[[1]], strsplit(lastancestor, "")[[1]])
-  othersisters <- paste0(othersisters, collapse = "")
+  othersisters <- setdiff(strsplit(all[1], ",")[[1]], strsplit(lastancestor, ",")[[1]])
+  othersisters <- paste0(othersisters, collapse = ",")
   result <- c(sourcesisters, othersisters, targetsisters)
   result <- result[nzchar(result)]
   return(result)
@@ -222,7 +190,7 @@ fB <- function(blocks,
                source,
                target,
                demand_n_at_least_two = FALSE, # Many false positives arise when n = 1.
-               threshold = 2.326348, # Threshold for Z-score when testing that f4(C,A;D,E) is positive.
+               threshold = 1.644854, # Threshold for Z-score when testing that f4(B,A;D,E) and f(C,A;D,E) are positive.
                details = FALSE)  { # Switch to TRUE for a more detailed output.
   # All possible sets:
   sets <- sets(tree, source, target)
@@ -245,15 +213,17 @@ fB <- function(blocks,
         E <- sets[j]
         overACDE <- numeric(0)
         # Median over elements of A, C, D and E:
-        for (a in strsplit(A, "")[[1]]) {for (c in strsplit(C, "")[[1]]) {for (d in strsplit(D, "")[[1]]) {for (e in strsplit(E, "")[[1]]) {
+        for (a in strsplit(A, ",")[[1]]) {for (c in strsplit(C, ",")[[1]]) {for (d in strsplit(D, ",")[[1]]) {for (e in strsplit(E, ",")[[1]]) {
           # Make sure the denominator is significantly positive:
           if (qpdstat(blocks, c, a, d, e)$z > threshold) {
             overB <- numeric(0)
             # Minimum over elements of B:
-            for (b in strsplit(B, "")[[1]]) {
-              overB[length(overB) + 1] <- qpdstat(blocks, b, a, d, e)$est / qpdstat(blocks, c, a, d, e)$est
+            for (b in strsplit(B, ",")[[1]]) {
+              if (qpdstat(blocks, b, a, d, e)$z > threshold) {
+                overB[length(overB) + 1] <- qpdstat(blocks, b, a, d, e)$est / qpdstat(blocks, c, a, d, e)$est
+              } else {overB[length(overB) + 1] <- 0}
             }
-            overACDE[length(overACDE) + 1] <- max(0, min(overB))
+            overACDE[length(overACDE) + 1] <- min(overB)
           }
         }}}}
         # If all the denominators failed to be positive, this (lower) median might become NA:
@@ -273,6 +243,395 @@ fB <- function(blocks,
   }
   if (details == TRUE) {return(list(result = result, oversets = oversets, sets = sets, medians = medians))}
   else {return(result)}
+}
+
+# A function for calculating all the possible branch statistics into a table.
+# The table can be directly fed for the visualizing function plot_fbranch().
+all_fbranches <- function(blocks, # The blocks as produced by admixtools. 
+                          tree, # The backbone tree in Newick notation without branch lengths where leaves are labeled.
+                          type = "fB", # Value "fB" is enhanced branch statistic, "fb" Malinsky's branch statistic.
+                          demand_n_at_least_two = FALSE, # When type = "fB" this is carried on to the function fB().
+                          details = FALSE, # When type = "fB" this is carried on to the function fB().
+                          progress = TRUE,
+                          save = "" # Prefix for the RData file the table is saved in, if provided.
+) {
+  branches <- branches(tree)
+  table <- matrix(0, length(branches), length(branches))
+  rownames(table) <- branches; colnames(table) <- branches
+  if (type == "fB") {
+    c <- 0
+    for (t in branches) {
+      for (s in branches) {
+        table[t, s] <- fB(blocks, tree, s, t, demand_n_at_least_two = demand_n_at_least_two, details = details)
+        c <- c + 1
+        if (progress == TRUE) {print(paste(round(100 * c / length(branches)**2, 1), "%", sep = ""))}
+      }
+    }
+  }
+  if (type == "fb") {
+    # Finding the outgroup.
+    outgroup <- ""
+    wood <- substr(tree, 2, nchar(tree) - 1)
+    start <- sub(",.*$", "", wood)
+    if (grepl("[()]", start) == FALSE) {outgroup <- start}
+    end <- sub("^.*,(.*)$", "\\1", wood)
+    if (grepl("[()]", end) == FALSE) {outgroup <- end}
+    if (outgroup == "") {stop("The tree has no outgroup.")}
+    c <- 0
+    for (t in branches) {
+      for (s in branches) {
+        table[t, s] <- fb(blocks, tree, s, t, outgroup)
+        c <- c + 1
+        if (progress == TRUE) {print(paste(round(100 * c / length(branches)**2, 1), "%", sep = ""))}
+      }
+    }
+  }
+  if (save != "") {save(table, file = paste(save, ".RData", sep = ""))} # Saving the result on disk.
+  return(table)
+}
+
+# This function, using the help from two other functions defined below, plots the table of f-branch statistics.
+# It's a heatmap visualizing the value of f-branch statistic from a source branch (column) to a target branch (row).
+# There's two trees at the left and at the top pointing the location of the source and target branches within the tree.
+# It produces a pdf and a 600 dpi png to the current working directory.
+# The plotter requires the R packages ggplot2 and grid installed and loaded.
+plot_fbranch <- function(table, # A table of branch statistics with row- and colnames matching the output of the function branches().
+                         prefix, # A name (string) for the pdf and png files created, without the file type.
+                         lowcolor = "white", # The color encoding no indication of gene flow.
+                         highcolor = "#4CBB17", # The color encoding potential gene flow.
+                         missingcolor = "gray", # The color when statistic is missing, for example when it doesn't exist.
+                         upper = 0.1, # The highest value of those branch statistic that will be plotted.
+                         plussize = 2, # The size of the plus-symbol indicating values exceeding "upper", zero means do not draw.
+                         cellsize = 8, # The width of the (square) cells and the legend bar in millimeters.
+                         gridborders = 0.3, # The width of grid lines in millimeters.
+                         margins = 1, # The width of the margins that are padding the different plot components.
+                         dottedcolor = "gray", # The color of dotted lines pointing at inner branches of the tree.
+                         treelinewidth = "3", # The width of the branches of the tree and the dotted lines in pts (inch / 72).
+                         inner = 8, # How long the inner branches are in millimeters.
+                         terminal = 8, # How long the terminal branches are in millimeters, make sure this is long enough for labels.
+                         fontsize = 10, # Font size.
+                         fontface = "plain", # Font style, like "italic" or "bold".
+                         fontfamily = "sans", # Font family (can point to different fonts depending on stuff).
+                         sourcetarget = c("source", "target"), # What the two trees should be called, empty strings omit the labels.
+                         legendheight = 0.618 # The height of the legend bar as a proportion of plot height.
+) {
+  if (!require("ggplot2", quietly = TRUE)) {stop("Package 'ggplot2' is required but not installed or loaded.")}
+  if (!require("grid", quietly = TRUE)) {stop("Package 'grid' is required but not installed or loaded.")}
+  # Some computations that will be repeated later but necessary already here for determining the plot size:
+  branches <- rownames(table)
+  depth <- rep(0, length(branches))
+  names(depth) <- branches
+  branches_parts <- strsplit(branches, ",")
+  for (i in seq(1, length(branches))) {
+    branch <- branches[i]
+    branch_parts <- strsplit(branch, ",")[[1]]
+    is_child <- sapply(branches_parts, function(x) all(x %in% branch_parts))
+    children <- branches[is_child]
+    if (length(children) > 1) {
+      rest <- branches[i:length(branches)][!(branches[i:length(branches)] %in% children)]
+      if (any(depth[rest] >= depth[branch])) {depth[children] <- depth[children] + 1}
+    }
+  }
+  maxdepth <- max(depth)
+  total_width <- unit(maxdepth * inner + terminal + (nrow(table) + 2) * cellsize + 4 * margins, "mm")
+  total_height <- unit(maxdepth * inner + terminal + nrow(table) * cellsize + 4 * margins, "mm")
+  # Creating the pdf:
+  pdf(
+    paste(prefix, ".pdf", sep = ""),
+    width = total_width / 25.4, # In inches.
+    height = total_height / 25.4 # In inches.
+  )
+  draw_fbranch_plot(table,
+                    lowcolor,
+                    highcolor,
+                    missingcolor,
+                    upper,
+                    plussize,
+                    cellsize,
+                    gridborders,
+                    margins,
+                    dottedcolor,
+                    treelinewidth,
+                    inner,
+                    terminal,
+                    fontsize,
+                    fontface,
+                    fontfamily,
+                    sourcetarget,
+                    legendheight
+  )
+  invisible(dev.off())
+  # Creating the png:
+  png(
+    filename = paste(prefix, ".png", sep = ""),
+    type = "cairo",
+    res = 600,
+    width = 600 * total_width / 25.4, # In pixels given 600 dpi.
+    height = 600 * total_height / 25.4 # In pixels given 600 dpi.
+  )
+  draw_fbranch_plot(table,
+                    lowcolor,
+                    highcolor,
+                    missingcolor,
+                    upper,
+                    plussize,
+                    cellsize,
+                    gridborders,
+                    margins,
+                    dottedcolor,
+                    treelinewidth,
+                    inner,
+                    terminal,
+                    fontsize,
+                    fontface,
+                    fontfamily,
+                    sourcetarget,
+                    legendheight
+  )
+  invisible(dev.off())
+}
+
+# This helper function actually draws the plot.
+draw_fbranch_plot <- function(table,
+                              lowcolor,
+                              highcolor,
+                              missingcolor,
+                              upper,
+                              plussize,
+                              cellsize,
+                              gridborders,
+                              margins,
+                              dottedcolor,
+                              treelinewidth,
+                              inner,
+                              terminal,
+                              fontsize,
+                              fontface,
+                              fontfamily,
+                              sourcetarget,
+                              legendheight
+) {
+  branches <- rownames(table)
+  # Start by working out the tree structure because it affects the dimensions of plot components:
+  depth <- rep(0, length(branches)); width <- rep(0, length(branches))
+  names(depth) <- branches; names(width) <- branches
+  branches_parts <- strsplit(branches, ",")
+  for (i in seq(1, length(branches))) {
+    branch <- branches[i]
+    branch_parts <- strsplit(branch, ",")[[1]]
+    is_child <- sapply(branches_parts, function(x) all(x %in% branch_parts))
+    children <- branches[is_child]
+    if (length(children) > 1) {
+      width[branch] <- max(which(is_child))
+      rest <- branches[i:length(branches)][!(branches[i:length(branches)] %in% children)]
+      if (any(depth[rest] >= depth[branch])) {depth[children] <- depth[children] + 1}
+    }
+  }
+  width[duplicated(width)] <- 0
+  maxdepth <- max(depth)
+  # Assign the dimensions then:
+  common_dimension <- unit(nrow(table) * cellsize + 2 * margins, "mm")
+  tree_dimension <- unit(maxdepth * inner + terminal + 2 * margins, "mm")
+  legend_dimension <- unit(2 * cellsize, "mm")
+  # The full layout is 2 × 3; heatmap at (2, 2), trees at (2, 1) and (1, 2), and legend at (2, 3):
+  grid.newpage()
+  pushViewport(viewport(layout = grid.layout(
+    nrow = 2,
+    ncol = 3,
+    widths = unit.c(tree_dimension, common_dimension, legend_dimension),
+    heights = unit.c(tree_dimension, common_dimension)
+  )))
+  # Top tree:
+  pushViewport(viewport(layout.pos.row = 1, layout.pos.col = 2))
+  draw_tree(table,
+            cellsize,
+            margins,
+            dottedcolor,
+            treelinewidth,
+            inner, terminal,
+            fontsize,
+            fontface,
+            fontfamily,
+            sourcetarget,
+            depth,
+            width,
+            TRUE
+  )
+  popViewport()
+  # Left tree:
+  pushViewport(viewport(layout.pos.row = 2, layout.pos.col = 1))
+  draw_tree(table,
+            cellsize,
+            margins,
+            dottedcolor,
+            treelinewidth,
+            inner, terminal,
+            fontsize,
+            fontface,
+            fontfamily,
+            sourcetarget,
+            depth,
+            width,
+            FALSE
+  )
+  popViewport()
+  # Heatmap:
+  pushViewport(viewport(layout.pos.row = 2, layout.pos.col = 2))
+  df <- data.frame(
+    row = rep(rownames(table), each = ncol(table)),
+    col = rep(colnames(table), times = nrow(table)),
+    value = as.vector(t(table))
+  )
+  df$row <- factor(df$row, levels = rev(rownames(table)))
+  df$col <- factor(df$col, levels = colnames(table))
+  df$over <- sapply(df$value > upper, isTRUE) # Where to draw the plus symbol.
+  if (plussize == 0) {df$over <- FALSE} # Size zero would actually draw something while we wish to draw nothing.
+  df$value <- pmin(df$value, upper, na.rm = FALSE) # Cap the branch statistics at the upper value for visibility.
+  edges <- seq(0.5, nrow(table) + 0.5, by = 1)
+  heat <- ggplot(df, aes(x = col, y = row, fill = value)) +
+    geom_tile(color = "black", size = gridborders, linejoin = "round", lineend = "round") +
+    geom_text(data = df[df$over == TRUE, ], aes(label = "+"), size = plussize) +
+    scale_fill_gradient(
+      low = lowcolor, high = highcolor,
+      na.value = missingcolor,
+      guide = "none"
+    ) +
+    coord_fixed(ratio = 1) +
+    theme_void() +
+    theme(plot.margin = margin(margins, margins, margins, margins))
+  grid.draw(ggplotGrob(heat))
+  popViewport()
+  # Legend:
+  pushViewport(viewport(layout.pos.row = 2, layout.pos.col = 3))
+  position <- (1.5 * cellsize - margins) / (2 * cellsize)
+  grid.rect(x = position, y = 0.5, width = 0.5, height = legendheight,
+            gp = gpar(fill = linearGradient(colours = c(lowcolor, highcolor)),
+                      col = "black", lwd = 2.834645669 * gridborders))
+  upper_char <- as.character(upper)
+  if (grepl("\\.", upper_char)) {decimals <- nchar(sub(".*\\.", "", upper_char))}
+  else {decimals <- 0}
+  legend_pad <- margins / convertUnit(common_dimension, "mm", valueOnly = TRUE)
+  grid.text(formatC(0, format = "f", digits = decimals), x = position,
+            y = (1 - legendheight) / 2 - legend_pad, just = "top",
+            gp = gpar(fontsize = fontsize, fontface = fontface, fontfamily = fontfamily))
+  grid.text(upper, x = position, 
+            y = (1 + legendheight) / 2 + legend_pad, just = "bottom",
+            gp = gpar(fontsize = fontsize, fontface = fontface, fontfamily = fontfamily))
+  popViewport()
+  popViewport()
+  invisible(NULL)
+}
+
+# This helper function draws the two trees in the plot.
+draw_tree <- function(table,
+                      cellsize,
+                      margins,
+                      dottedcolor,
+                      treelinewidth,
+                      inner,
+                      terminal,
+                      fontsize,
+                      fontface,
+                      fontfamily,
+                      sourcetarget,
+                      depth,
+                      width,
+                      flip) {
+  branches <- rownames(table)
+  maxdepth <- max(depth)
+  pushViewport(viewport(clip = "off")) # Plot elements like text seeping onto the padding is allowed.
+  if (flip) {
+    vp_inner <- viewport(
+      x = 0.5, # Center the tree canvas inside the padding.
+      y = 0.5, # Center the tree canvas inside the padding.
+      width = unit(nrow(table) * cellsize, "mm"),
+      height  = unit(maxdepth * inner + terminal, "mm"),
+      xscale = c(0.5, length(branches) + 0.5), # Labels and branch tips are mid-cells relative to the heatmap.
+      yscale = c(maxdepth * inner + terminal, 0),
+      clip = "off"
+    )
+  } else {
+    vp_inner <- viewport(
+      x = 0.5, # Center the tree canvas inside the padding.
+      y = 0.5, # Center the tree canvas inside the padding.
+      width  = unit(maxdepth * inner + terminal, "mm"),
+      height = unit(nrow(table) * cellsize, "mm"),
+      xscale = c(0, maxdepth * inner + terminal),
+      yscale = c(length(branches) + 0.5, 0.5), # Labels and branch tips are mid-cells relative to the heatmap.
+      clip = "off"
+    )
+  }
+  pushViewport(vp_inner)
+  if (flip) {
+    pad <- convertHeight(unit(margins, "mm"), "native", valueOnly = TRUE)
+  } else {
+    pad <- convertWidth(unit(margins, "mm"), "native", valueOnly = TRUE)
+  }
+  for (i in seq(1, length(branches))) {
+    branch <- branches[i]
+    if (grepl(",", branch)) { # Inner branches, drawn first so dotted lines never cover the tree.
+      if (flip) {
+        grid.segments(y0 = maxdepth * inner + terminal, x0 = i, y1 = depth[i] * inner, x1 = i,
+                      default.units = "native", gp = gpar(col = dottedcolor, lwd = treelinewidth, lty = "dotted"))
+      } else {
+        grid.segments(x0 = maxdepth * inner + terminal, y0 = i, x1 = depth[i] * inner, y1 = i,
+                      default.units = "native", gp = gpar(col = dottedcolor, lwd = treelinewidth, lty = "dotted"))
+      }
+    } else { # Terminal branches, shortened to make room for the labels.
+      if (flip) {
+        label_width <- fontsize * convertHeight(stringWidth(branch), "native", valueOnly = TRUE) / 12
+        grid.segments(y0 = depth[i] * inner, x0 = i, y1 = maxdepth * inner + terminal + label_width + pad, x1 = i,
+                      default.units = "native", gp = gpar(col = "black", lwd = treelinewidth))
+        grid.text(branch, y = unit(maxdepth * inner + terminal, "native"), x = unit(i, "native"), just = "left",
+                  rot = 90, gp = gpar(fontsize = fontsize, fontface = fontface, fontfamily = fontfamily))
+      } else {
+        label_width <- fontsize * convertWidth(stringWidth(branch), "native", valueOnly = TRUE) / 12
+        grid.segments(x0 = depth[i] * inner, y0 = i, x1 = maxdepth * inner + terminal - label_width - pad, y1 = i,
+                      default.units = "native", gp = gpar(col = "black", lwd = treelinewidth))
+        grid.text(branch, x = unit(maxdepth * inner + terminal, "native"), y = unit(i, "native"), just = "right",
+                  gp = gpar(fontsize = fontsize, fontface = fontface, fontfamily = fontfamily))
+      }
+    }
+  }
+  # The root:
+  if (flip) {
+    grid.segments(y0 = 0, x0 = 0, y1 = 0, x1 = 1,
+                  default.units = "native", gp = gpar(col = "black", lwd = treelinewidth))
+  } else {
+    grid.segments(x0 = 0, y0 = 0, x1 = 0, y1 = 1,
+                  default.units = "native", gp = gpar(col = "black", lwd = treelinewidth))
+  }
+  for (i in seq(1, length(branches))) {
+    if (width[i] > 0) { # Orthogonal branches connecting others.
+      if (flip) {
+        grid.segments(y0 = depth[i] * inner, x0 = i, y1 = depth[i] * inner, x1 = width[i],
+                      default.units = "native", gp = gpar(col = "black", lwd = treelinewidth))
+      } else {
+        grid.segments(x0 = depth[i] * inner, y0 = i, x1 = depth[i] * inner, y1 = width[i],
+                      default.units = "native", gp = gpar(col = "black", lwd = treelinewidth))
+      }
+      if (i > 1) {
+        if (flip) { # The tips for the orthogonal branches, except the first one.
+          grid.segments(y0 = (depth[i] - 1) * inner, x0 = i, y1 = depth[i] * inner, x1 = i,
+                        default.units = "native", gp = gpar(col = "black", lwd = treelinewidth))          
+        } else {
+          grid.segments(x0 = (depth[i] - 1) * inner, y0 = i, x1 = depth[i] * inner, y1 = i,
+                        default.units = "native", gp = gpar(col = "black", lwd = treelinewidth))
+        }
+      }
+    }
+  }
+  # Labeling the tree.
+  if (flip) {
+    grid.text(sourcetarget[1], x = unit(0, "native"), y = unit(0 - 2 * pad, "native"), just = "right",
+              rot = 90, gp = gpar(fontsize = fontsize, fontface = fontface, fontfamily = fontfamily))
+  } else {
+    grid.text(sourcetarget[2], x = unit(0 + 2 * pad, "native"), y = unit(0, "native"), just = "left",
+              gp = gpar(fontsize = fontsize, fontface = fontface, fontfamily = fontfamily))
+  }
+  popViewport()
+  popViewport()
+  invisible(NULL)
 }
 
 # Computes the f4-ratio of a unidirectional gene flow, inference done with block jackknife estimation of variance.
@@ -315,91 +674,17 @@ bidirectional_alpha <- function(blocks, A, B, C, D, E) {
 }
 
 ###################################################################################################
-### RUNNING ENHANCED FBRANCH ON THE SETTING OF FIGURE 4 LOWER LEFT PANEL ##########################
+### RUNNING MALINSKY'S BRANCH STATISTIC ###########################################################
 ###################################################################################################
 
-rownames <- branches(tree)
-colnames <- rownames
-table <- matrix(0, length(rownames), length(colnames))
-rownames(table) <- rownames
-colnames(table) <- colnames
-for (i in rownames) {
-  for (j in colnames) {
-    print(c(j, i))
-    table[i, j] <- fB(blocks, tree, j, i, demand_n_at_least_two = TRUE)
-  }
-}
-# I have to change the order of rows and columns so that the "backbone" tree looks tidy.
-order <- c("0abcdefghijklmnopqrstuvwxyz", "0", "abcdefghijklmnopqrstuvwxyz", "z", "abcdefghijklmnopqrstuvwxy", "b",
-           "acdefghijklmnopqrstuvwxy", "acdefgh", "h", "acdefg", "acg", "g", "ac", "a", "c", "def", "f", "de", "e", "d",
-           "ijklmnopqrstuvwxy", "ijklmnop", "ij", "j", "i", "klmnop", "p", "klmno", "k", "lmno", "o", "lmn", "l", "mn", "n", "m",
-           "qrstuvwxy", "r", "qstuvwxy", "q", "stuvwxy", "s", "tuvwxy", "y", "tuvwx", "x", "tuvw", "u", "tvw", "t", "vw", "v", "w")
-table <- table[order, order]
-max(table, na.rm = TRUE) # 0.4254846
-save(table, file = "bears_enhanced.RData")
-df <- data.frame(
-  row = rep(rownames(table), each = ncol(table)),
-  col = rep(colnames(table), times = nrow(table)),
-  value = as.vector(t(table))
-)
-df$row <- factor(df$row, levels = rev(rownames(table)))
-df$col <- factor(df$col, levels = colnames(table))
-df$over <- sapply(df$value > 0.1, isTRUE)
-df$value <- pmin(df$value, 0.1, na.rm = FALSE)
+# Computing the statistics:
+table <- all_fbranches(blocks, tree, type = "fb", save = "bears_Malinsky")
 
-plot <- ggplot(df, aes(x = col, y = row, fill = value)) +
-  geom_tile(color = "black", size = 0.3) +
-  geom_text(data = df[df$over == TRUE, ], aes(label = "+"), size = 2) +
-  scale_fill_gradient(
-    low = "white", high = "#4CBB17",
-    na.value = "#CCCCCC",
-    limits = c(0, 0.1),
-    breaks = seq(0, 0.1, by = 0.01),
-    name = NULL,
-    guide = guide_colorbar(
-      ticks = TRUE,
-      ticks.colour = NA,
-      frame.colour = "black",
-      frame.linewidth = 0.3,
-      barwidth = unit(0.2, "cm"),
-      barheight = unit(5, "cm"),
-      label = FALSE
-    )
-  ) +
-  scale_x_discrete(position = "top") +
-  coord_fixed(ratio = 1) +
-  theme_void() +
-  theme(
-    axis.text.x = element_blank(),
-    axis.text.y = element_blank(),
-    plot.margin = margin(0.1, 0, 0, 0),
-    legend.position = "right",
-    legend.box.spacing = unit(0.1, "cm")
-  )
-ggsave("bears_enhanced.pdf", height = 10.731, width = 11.09, units = "cm")
+# Testing the default plotter (not used in the article):
+plot_fbranch(table, "bears_Malinsky_default", cellsize = 5, inner = 5, plussize = 3, terminal = 25)
 
-###################################################################################################
-### RUNNING MALINSKY'S FBRANCH ON THE SETTING OF FIGURE 4 LOWER LEFT PANEL ########################
-###################################################################################################
-
-rownames <- branches(tree)
-colnames <- rownames
-table <- matrix(0, length(rownames), length(colnames))
-rownames(table) <- rownames
-colnames(table) <- colnames
-for (i in rownames) {
-  for (j in colnames) {
-    print(c(j, i))
-    table[i, j] <- fb(blocks, tree, j, i, "0")
-  }
-}
-order <- c("0abcdefghijklmnopqrstuvwxyz", "0", "abcdefghijklmnopqrstuvwxyz", "z", "abcdefghijklmnopqrstuvwxy", "b",
-           "acdefghijklmnopqrstuvwxy", "acdefgh", "h", "acdefg", "acg", "g", "ac", "a", "c", "def", "f", "de", "e", "d",
-           "ijklmnopqrstuvwxy", "ijklmnop", "ij", "j", "i", "klmnop", "p", "klmno", "k", "lmno", "o", "lmn", "l", "mn", "n", "m",
-           "qrstuvwxy", "r", "qstuvwxy", "q", "stuvwxy", "s", "tuvwxy", "y", "tuvwx", "x", "tuvw", "u", "tvw", "t", "vw", "v", "w")
-table <- table[order, order]
+# (Supplementary) figure S3 (heat map only, trees made with LaTeX tikzpicture):
 max(table, na.rm = TRUE) # 0.7205772
-save(table, file = "bears_Malinsky.RData")
 df <- data.frame(
   row = rep(rownames(table), each = ncol(table)),
   col = rep(colnames(table), times = nrow(table)),
@@ -409,7 +694,6 @@ df$row <- factor(df$row, levels = rev(rownames(table)))
 df$col <- factor(df$col, levels = colnames(table))
 df$over <- sapply(df$value > 0.1, isTRUE)
 df$value <- pmin(df$value, 0.1, na.rm = FALSE)
-
 plot <- ggplot(df, aes(x = col, y = row, fill = value)) +
   geom_tile(color = "black", size = 0.3) +
   geom_text(data = df[df$over == TRUE, ], aes(label = "+"), size = 2) +
@@ -437,83 +721,153 @@ plot <- ggplot(df, aes(x = col, y = row, fill = value)) +
     axis.text.y = element_blank(),
     plot.margin = margin(0.1, 0, 0, 0),
     legend.position = "right",
-    legend.box.spacing = unit(0.1, "cm")
+    legend.box.spacing = unit(0.2, "cm")
   )
-ggsave("bears_Malinsky.pdf", height = 10.731, width = 11.09, units = "cm")
+ggsave("bears_Malinsky.pdf", height = 10.731, width = 11.19, units = "cm")
+
+###################################################################################################
+### USING ENHANCED BRANCH STATISTICS ##############################################################
+###################################################################################################
+
+# Computing the statistics:
+table <- all_fbranches(blocks, tree, demand_n_at_least_two = TRUE, save = "bears_enhanced")
+
+# Testing the default plotter (not used in the article):
+plot_fbranch(table, "bears_enhanced_default", cellsize = 5, inner = 5, plussize = 3, terminal = 25)
+
+# Figure 7 (heat map only, trees made with LaTeX tikzpicture):
+max(table, na.rm = TRUE) # 0.3692701
+df <- data.frame(
+  row = rep(rownames(table), each = ncol(table)),
+  col = rep(colnames(table), times = nrow(table)),
+  value = as.vector(t(table))
+)
+df$row <- factor(df$row, levels = rev(rownames(table)))
+df$col <- factor(df$col, levels = colnames(table))
+df$over <- sapply(df$value > 0.1, isTRUE)
+df$value <- pmin(df$value, 0.1, na.rm = FALSE)
+plot <- ggplot(df, aes(x = col, y = row, fill = value)) +
+  geom_tile(color = "black", size = 0.3) +
+  geom_text(data = df[df$over == TRUE, ], aes(label = "+"), size = 2) +
+  scale_fill_gradient(
+    low = "white", high = "#4CBB17",
+    na.value = "#CCCCCC",
+    limits = c(0, 0.1),
+    breaks = seq(0, 0.1, by = 0.01),
+    name = NULL,
+    guide = guide_colorbar(
+      ticks = TRUE,
+      ticks.colour = NA,
+      frame.colour = "black",
+      frame.linewidth = 0.3,
+      barwidth = unit(0.2, "cm"),
+      barheight = unit(5, "cm"),
+      label = FALSE
+    )
+  ) +
+  scale_x_discrete(position = "top") +
+  coord_fixed(ratio = 1) +
+  theme_void() +
+  theme(
+    axis.text.x = element_blank(),
+    axis.text.y = element_blank(),
+    plot.margin = margin(0.1, 0, 0, 0),
+    legend.position = "right",
+    legend.box.spacing = unit(0.2, "cm")
+  )
+ggsave("bears_enhanced.pdf", height = 10.731, width = 11.19, units = "cm")
 
 ###################################################################################################
 ### EXAMINING THE POLAR BEAR COLUMN MORE CLOSELY ##################################################
 ###################################################################################################
 
-# The enhanced statistic doesn't detect gene flow from polar ("z") into ABCbc ("u"), while it's generally recognized as a true event. Why?
+# The enhanced statistic doesn't detect gene flow from polar into ABCbc, while it's generally recognized as a true event. Why?
 # Let's dissect the statistic.
 
-fB(blocks, tree, "z", "u", details = TRUE)
+fB(blocks, tree, "polar", "ABCbc", details = TRUE)
 # The lower medians for individual (D, E)-pairs:
 #
 # $result
 # [1] 0
 #
 # $oversets
-# [,1]       [,2]       [,3]        [,4]        [,5]       [,6]        [,7]       [,8]       [,9]       [,10]
-# [1,]   NA 0.03352305 0.03367351 0.020882479 0.020456068 0.01711295 0.019339214 0.02954044 0.04272552 0.029275785
-# [2,]   NA         NA 0.02504419 0.006918781 0.005390131 0.00000000 0.007119573 0.02237737 0.06299100 0.031156743
-# [3,]   NA         NA         NA 0.000000000 0.000000000 0.00000000 0.000000000 0.01761465 0.10830993 0.026897414
-# [4,]   NA         NA         NA          NA 0.000000000 0.00000000 0.006337683 0.10064674 0.21140978 0.106682725
-# [5,]   NA         NA         NA          NA          NA 0.00000000 0.000000000 0.11898984 0.23788319 0.105087610
-# [6,]   NA         NA         NA          NA          NA         NA 0.608858906 0.53659497 0.59314217 0.259051655
-# [7,]   NA         NA         NA          NA          NA         NA          NA 0.45516880 0.58465656 0.232251390
-# [8,]   NA         NA         NA          NA          NA         NA          NA         NA 0.70378073 0.007236471
-# [9,]   NA         NA         NA          NA          NA         NA          NA         NA         NA 0.000000000
-# [10,]   NA         NA         NA          NA          NA         NA          NA         NA         NA          NA
+#       [,1]       [,2]       [,3]       [,4]       [,5]       [,6]       [,7]       [,8]       [,9]      [,10]
+# [1,]    NA 0.03352305 0.03367351 0.02088248 0.02045607 0.01711295 0.01933921 0.02954044 0.04272552 0.02927579
+# [2,]    NA         NA 0.02504419 0.00000000 0.00000000 0.00000000 0.00000000 0.02237737 0.06299100 0.03115674
+# [3,]    NA         NA         NA 0.00000000 0.00000000 0.00000000 0.00000000 0.00000000 0.10830993 0.00000000
+# [4,]    NA         NA         NA         NA 0.00000000 0.00000000 0.00000000 0.10064674 0.21140978 0.10668272
+# [5,]    NA         NA         NA         NA         NA 0.00000000 0.00000000 0.11898984 0.23788319 0.10508761
+# [6,]    NA         NA         NA         NA         NA         NA 0.60885891 0.53659497 0.59314217 0.25905166
+# [7,]    NA         NA         NA         NA         NA         NA         NA 0.45516880 0.58465656 0.23225139
+# [8,]    NA         NA         NA         NA         NA         NA         NA         NA 0.70378073 0.00000000
+# [9,]    NA         NA         NA         NA         NA         NA         NA         NA         NA 0.00000000
+# [10,]   NA         NA         NA         NA         NA         NA         NA         NA         NA         NA
 #
 # $sets
-# [1] "z"        "0"        "b"        "acdefgh"  "ijklmnop" "r"        "q"        "s"        "y"        "x"       
+# [1]  "polar"                                                                 
+# [2]  "Black"                                                                 
+# [3]  "Himalaya"                                                              
+# [4]  "Baltic,Europe,MiddleEast,MidScand,NorthScand,SouthScand,Ural"          
+# [5]  "Amur,CentreRus,CentreRus2,Hokkaido,Kamtchatka,Magadan,Sakhalin,Yakutia"
+# [6]  "Kodiak"                                                                
+# [7]  "Aleutian"                                                              
+# [8]  "Alaska"                                                                
+# [9]  "HudsonBay"                                                             
+# [10] "ABCcoast1"                                                             
 #
 # $medians
-# [1] 0.033523047 0.025044189 0.006918781 0.000000000 0.000000000 0.006337683 0.100646745 0.211409780 0.031156743
-
-# Certain E return enough negative rations to collapse the statistic into zero.
+# [1] 0.03352305 0.02504419 0.00000000 0.00000000 0.00000000 0.00000000 0.10064674 0.21140978 0.03115674
+# Certain E return enough negative ratios to collapse the statistic into zero.
 # Gene flow from Kodiak to ABCbc is a problem, but likely the biggest issue is too dense sampling among the American brown bears,
 # many of which are involved in admixture with polar bears and each other.
 # Discarding ABCcoast1, ABCa, ABCcoast2 and Westcoast clarifies the picture.
-
-fB(blocks, less_Americans, "z", "u", details = TRUE)
+ 
+fB(blocks, less_Americans, "polar", "ABCbc", details = TRUE)
 # The lower medians for individual (D, E)-pairs:
 #
 # $result
 # [1] 0.04780453
 #
 # $oversets
-# [,1]       [,2]       [,3]       [,4]       [,5]       [,6]       [,7]       [,8]
+#      [,1]       [,2]       [,3]       [,4]       [,5]       [,6]       [,7]       [,8]
 # [1,]   NA 0.04780453 0.05032491 0.04908311 0.04880464 0.04986558 0.04959242 0.05147107
 # [2,]   NA         NA 0.05929640 0.05271410 0.05152677 0.05479069 0.05378483 0.05981026
-# [3,]   NA         NA         NA 0.02674209 0.02628375 0.04558783 0.04314495 0.06071967
-# [4,]   NA         NA         NA         NA 0.09330431 0.06581236 0.05885747 0.08835331
-# [5,]   NA         NA         NA         NA         NA 0.05585979 0.04870204 0.08563491
-# [6,]   NA         NA         NA         NA         NA         NA         NA 0.15889733
+# [3,]   NA         NA         NA 0.00000000 0.00000000 0.04558783 0.04314495 0.06071967
+# [4,]   NA         NA         NA         NA 0.08737836 0.00000000 0.05885747 0.08835331
+# [5,]   NA         NA         NA         NA         NA 0.00000000 0.00000000 0.08563491
+# [6,]   NA         NA         NA         NA         NA         NA 0.00000000 0.00000000
 # [7,]   NA         NA         NA         NA         NA         NA         NA 0.25422414
 # [8,]   NA         NA         NA         NA         NA         NA         NA         NA
 #
 # $sets
-# [1] "z"        "0"        "b"        "acdefgh"  "ijklmnop" "r"        "q"        "s"       
+# [1] "polar"                                                                 
+# [2] "Black"                                                                 
+# [3] "Himalaya"                                                              
+# [4] "Baltic,Europe,MiddleEast,MidScand,NorthScand,SouthScand,Ural"          
+# [5] "Amur,CentreRus,CentreRus2,Hokkaido,Kamtchatka,Magadan,Sakhalin,Yakutia"
+# [6] "Kodiak"                                                                
+# [7] "Aleutian"                                                              
+# [8] "Alaska"                                                                
 #
 # $medians
-# [1] 0.04780453 0.05032491 0.04908311 0.04880464 0.05479069 0.04959242 0.08563491
+# [1] 0.04780453 0.05032491 0.04908311 0.04880464 0.04558783 0.04314495 0.06071967
 
 ###################################################################################################
 ### UNIDIRECTIONAL ADMIXTURE PROPORTION ESTIMATES FOR MANY CHOICES OF D AND E #####################
 ###################################################################################################
 
+# This is for Figure 8.
+
 B_to_P <- numeric(0)
 P_to_B <- numeric(0)
-Eurasia <- c("m", "n", "l", "o", "k", "p", "i", "j", "d", "e", "f", "c", "a", "g", "h", "b")
-America <- c("r", "q", "s", "y", "x", "t", "v", "w")
+Eurasia <- c("Hokkaido", "Sakhalin", "Amur", "Magadan", "Yakutia", "Kamtchatka", "CentreRus2", "CentreRus",
+             "SouthScand", "MidScand", "NorthScand", "Europe", "MiddleEast", "Baltic", "Ural", "Himalaya")
+America <- c("Kodiak", "Aleutian", "Alaska", "HudsonBay", "ABCcoast1", "ABCa", "ABCcoast2", "Westcoast")
 i <- 1
 for (e in Eurasia) {
   for (a in America) {
-    B_to_P[i] <- qpdstat(blocks, "z", "0", a, e)$est / qpdstat(blocks, "u", "0", a, e)$est
-    P_to_B[i] <- qpdstat(blocks, "u", a, e, "0")$est / qpdstat(blocks, "z", a, e, "0")$est
+    B_to_P[i] <- qpdstat(blocks, "polar", "Black", a, e)$est / qpdstat(blocks, "ABCbc", "Black", a, e)$est
+    P_to_B[i] <- qpdstat(blocks, "ABCbc", a, e, "Black")$est / qpdstat(blocks, "polar", a, e, "Black")$est
     print(paste(e, a, B_to_P[i], P_to_B[i]))
     i <- i + 1
   }
@@ -548,9 +902,9 @@ plot <- ggplot(df, aes(x = America, y = Eurasia, fill = B_to_P)) +
     axis.text.y = element_blank(),
     plot.margin = margin(0.1, 0, 0, 0),
     legend.position = "right",
-    legend.box.spacing = unit(0.3, "cm")
+    legend.box.spacing = unit(0.275, "cm")
   )
-ggsave("B_to_P.pdf", height = 3.247, width = 2.2, units = "cm")
+ggsave("B_to_P.pdf", height = 3.247, width = 2.19, units = "cm")
 
 plot <- ggplot(df, aes(x = "", y = B_to_P)) +
   geom_boxplot(
@@ -602,9 +956,9 @@ plot <- ggplot(df, aes(x = America, y = Eurasia, fill = P_to_B)) +
     axis.text.y = element_blank(),
     plot.margin = margin(0.1, 0, 0, 0),
     legend.position = "right",
-    legend.box.spacing = unit(0.3, "cm")
+    legend.box.spacing = unit(0.275, "cm")
   )
-ggsave("P_to_B.pdf", height = 3.247, width = 2.2, units = "cm")
+ggsave("P_to_B.pdf", height = 3.247, width = 2.19, units = "cm")
 
 plot <- ggplot(df, aes(x = "", y = P_to_B)) +
   geom_boxplot(
@@ -635,46 +989,46 @@ ggsave("P_to_B_box.pdf", height = 0.812, width = 1.98, units = "cm")
 ###################################################################################################
 
 # Unidirectional estimate of gene flow from ABCbc into polar when D = Kodiak and E = Hokkaido:
-unidirectional_alpha(blocks, "0", "z", "u", "r", "m")
+unidirectional_alpha(blocks, "Black", "polar", "ABCbc", "Kodiak", "Hokkaido")
 # We get alpha = -0.05409189, standard error = 0.07857384.
 
 # Unidirectional estimate of gene flow from polar into ABCbc when A = Westcoast and E = Kamtchatka:
-unidirectional_alpha(blocks, "w", "u", "z", "0", "p")
+unidirectional_alpha(blocks, "Westcoast", "ABCbc", "polar", "Black", "Kamtchatka")
 # We get alpha = -0.1194174, standard error = 0.0140731.
 
 # Bidirectional estimate of gene flow from ABCbc into polar when D = Aleutian and E = Europe:
-bidirectional_alpha(blocks, "0", "z", "u", "q", "c")
+bidirectional_alpha(blocks, "Black", "polar", "ABCbc", "Aleutian", "Europe")
 # We get alpha = 0.2427674, standard error = 0.03439345.
 
 # Unidirectional estimate of gene flow from ABCbc into polar when D = Aleutian and E = Europe:
-unidirectional_alpha(blocks, "0", "z", "u", "q", "c")
+unidirectional_alpha(blocks, "Black", "polar", "ABCbc", "Aleutian", "Europe")
 # We get alpha = 0.2711622, standard error = 0.03727932.
 
 # Bidirectional estimate of gene flow from polar into ABCbc when A = Aleutian and E = Europe:
-bidirectional_alpha(blocks, "q", "u", "z", "0", "c")
+bidirectional_alpha(blocks, "Aleutian", "ABCbc", "polar", "Black", "Europe")
 # We get alpha = 0.1047153, standard error = 0.009286217.
 
 # Unidirectional estimate of gene flow from polar into ABCbc when A = Aleutian and E = Europe:
-unidirectional_alpha(blocks, "q", "u", "z", "0", "c")
+unidirectional_alpha(blocks, "Aleutian", "ABCbc", "polar", "Black", "Europe")
 # We get alpha = 0.1382869, standard error = 0.0110793.
 
 # Bidirectional estimate of gene flow from Westcoast into polar when D = Aleutian and E = Europe:
-bidirectional_alpha(blocks, "0", "z", "w", "q", "c")
+bidirectional_alpha(blocks, "Black", "polar", "Westcoast", "Aleutian", "Europe")
 # We get alpha = 0.2600125, standard error = 0.0373217.
 
 # Unidirectional estimate of gene flow from Westcoast into polar when D = Aleutian and E = Europe:
-unidirectional_alpha(blocks, "0", "z", "w", "q", "c")
+unidirectional_alpha(blocks, "Black", "polar", "Westcoast", "Aleutian", "Europe")
 # We get alpha = 0.3037591, standard error = 0.04129335.
 
 # Bidirectional estimate of gene flow from polar into Westcoast when A = Aleutian and E = Europe:
-bidirectional_alpha(blocks, "q", "w", "z", "0", "c")
+bidirectional_alpha(blocks, "Aleutian", "Westcoast", "polar", "Black", "Europe")
 # We get alpha = 0.1440177, standard error = 0.01106957.
 
 # Unidirectional estimate of gene flow from polar into Westcoast when A = Aleutian and E = Europe:
-unidirectional_alpha(blocks, "q", "w", "z", "0", "c")
+unidirectional_alpha(blocks, "Aleutian", "Westcoast", "polar", "Black", "Europe")
 # We get alpha = 0.1946219, standard error = 0.01177941.
 
-# Like Figure 7 already suggested, looks like Westcoast is more involved with polar bear admixture than the ABC bears are.
-qpdstat(blocks, "u", "c", "z", "0") # f4 = 0.00672, standard error = 0.000305 
-qpdstat(blocks, "w", "c", "z", "0") # f4 = 0.00346, standard error = 0.000303 
-# But the bare f4-statistic is emphasizing recent events because branch lengths matter.
+# Like Figure 8 already suggested, looks like Westcoast is more involved with polar bear admixture than the ABC bears are.
+qpdstat(blocks, "ABCbc", "Europe", "polar", "Black") # f4 = 0.00672, standard error = 0.000305 
+qpdstat(blocks, "Westcoast", "Europe", "polar", "Black") # f4 = 0.00346, standard error = 0.000303 
+# But the bare f4-statistic might be emphasizing recent events because branch lengths matter.
